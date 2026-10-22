@@ -1,174 +1,52 @@
-# End-to-End Training for Unified Tokenization and Latent Denoising
-### Let's UNITE! Single-stage training, Unified model for Tokenization & Generation <br/><br/>[Paper](https://arxiv.org/abs/2603.22283) | [Project Page](https://xingjianbai.com/unite-tokenization-generation/)
+# UNITE Split: Encoder/Decoder Deployment for Over-the-Air Latent Transmission
 
-This is the code repository of the paper:
-> [End-to-End Training for Unified Tokenization and Latent Denoising](https://arxiv.org/abs/2603.22283) (arXiv 2026)  
-> [Shivam Duggal*](https://shivamduggal4.github.io/), [Xingjian Bai*](https://xingjianbai.com/), [Zongze Wu](https://betterze.github.io/website/), [Richard Zhang](https://richzhang.github.io/), [Eli Shechtman](https://scholar.google.com/citations?user=B_FTboQAAAAJ&hl=zh-CN), [Antonio Torralba](https://groups.csail.mit.edu/vision/torralbalab/), [Phillip Isola](https://web.mit.edu/phillipi/), [William T. Freeman](https://billf.mit.edu/)  
-> MIT, Adobe  
+This repository builds on **[UNITE](https://github.com/ShivamDuggal4/UNITE-tokenization-generation)** ([paper](https://arxiv.org/abs/2603.22283)) by Duggal, Bai et al. (MIT, Adobe). For model details, setup, datasets, and training, see the original repository; the model and training code here are unchanged.
 
+## What this repository adds
 
-## Table of Content
-[Abstract](#Abstract)  
-[Approach Overview](#Overview)  
-[Setup](#Setup)  
-[Datasets](#Datasets)  
-[Training](#Training)  
-[Pretrained Checkpoints](#PretrainedCheckpoints)  
-[Evaluation](#Evaluation)  
-[Split Deployment (TX/RX)](#SplitDeployment)  
-[Citation](#Citation)  
+A trained UNITE model is split into two standalone halves that run on **different machines** and exchange only the latent representation, e.g. over a wireless link:
 
-<a name="Abstract"></a>
-## Abstract
-
-<div style="text-align: justify;">
-Latent diffusion models (LDMs) enable high-fidelity synthesis by operating in learned latent spaces. However, training state-of-the-art LDMs requires complex staging: a tokenizer must be trained first, before the diffusion model can be
-trained in the frozen latent space. We propose UNITE – an autoencoder architecture for unified tokenization and latent diffusion. UNITE consists of a Generative Encoder that serves as both image tokenizer and latent generator via weight sharing. Our key insight is that tokenization and generation can be viewed as the same latent inference problem under different conditioning regimes: tokenization infers latents from fully observed images, whereas generation infers them from noise together with text or class conditioning. Motivated by this, we introduce a single-stage training procedure that jointly optimizes both tasks via two forward passes through the same Generative Encoder. The shared parameters enable gradients
-to jointly shape the latent space, encouraging a “common latent language”. Across image and molecule modalities, UNITE achieves near state of the art performance without adversarial losses or pretrained encoders (e.g., DINO), reaching FID
-2.12 and 1.73 for Base and Large models on ImageNet 256 × 256. We further analyze the Generative Encoder through the lenses of representation alignment and compression. These results show that single stage joint training of tokenization & generation from scratch is feasible.
-</div>
-
-<a name="Approach Overview"></a>
-## Approach Overview
-![](./assets/overview.png)
-
-<a name="Setup"></a>
-## Setup
-
-```bash
-# Clone and install dependencies
-mamba create -n unite python=3.10 -y
-mamba activate unite
-pip install uv
-
-# Install PyTorch 2.10.0 with CUDA 12.8 or higher # or your own cuda version
-uv pip install -r requirements.txt
+```
+ PC 1 (transmitter)                                          PC 2 (receiver)
+ image ─► encoder.pt ─► latent z (256×32) ─►  ~ ~ link ~ ~  ─► decoder.pt ─► image
 ```
 
-Required packages: `torch>=2.1`, `torchvision`, `einops`, `torchdiffeq`, `lpips`, `pyyaml`, `clean-fid`.  
-Main requirement is to have a torch version which supports Muon optimizer.
-
-**For FID evaluation on Imagenet 256 x 256:**
-```
-wget https://github.com/toshas/torch-fidelity/releases/download/v0.2.0/weights-inception-2015-12-05-6726825d.pth  
-wget https://raw.githubusercontent.com/LTH14/JiT/main/fid_stats/jit_in256_stats.npz  
-export INCEPTION_WEIGHTS=/path/to/inception_weights  
-export IN256_FID_STATS=/path/to/in256_fid_stats  
-```
-
-<a name="Datasets"></a>
-## Datasets
-
-Training uses the [ImageNet-1K](https://image-net.org/) dataset (ILSVRC2012). Set the `DATA_PATH` environment variable to the training split:
-
-```bash
-export DATA_PATH=/path/to/imagenet/train
-```
-
-FID evaluation uses precomputed ImageNet statistics from `clean-fid`.  
-For our results on the molecules dataset, please refer to the paper.
-
-<a name="Training"></a>
-## Training
-
-![](./assets/architecture.png)
-
-Single-node (with 8 GPUs) training procedure on Imagenet 256x256:
-
-```bash
-# Using the launch script (auto-detects GPUs and data path)
-bash run_scripts/train.sh
-
-# Or directly with torchrun
-torchrun --nproc_per_node=8 main_train.py \
-    --config configs/imagenet.yaml \
-    --data-path $DATA_PATH \
-    --experiment-name lets-unite
-```
-
-To resume from a checkpoint, additionally provide the path of the checkpoint with argument: `--ckpt`.
-
-Key config fields (see `configs/imagenet.yaml`):
-
-| Field | Default | Description |
-|:------|:-------:|:------------|
-| `total_batch_size` | 1024 | Effective batch size across all GPUs and accumulation steps |
-| `grad_accum_steps` | 2 | Gradient accumulation steps (batch/GPU = total / world_size / accum) |
-| `flow_steps_per_recon` | 3 | Flow matching steps per reconstruction forward pass |
-| `flow_mini_batch` | 4 | Chunk size for flow steps (controls peak memory) |
-`torch_compile_decoder` | true | torch.compile the decoder for faster training |
-
-**Evaluation during training:**  FID is evaluated automatically at the end of each `fid_epoch` interval (default: every 40 epochs). The evaluation uses adaptive CFG scale search: starting from the current best scale, it tests neighboring scales and updates the best. At `fid_sweep_epoch` intervals (default: 120 epochs), a more comprehensive sweep is performed across multiple CFG intervals and normalization orders.
-
-
-### Reproducing Paper Results
-To reproduce the paper results for UNITE-B (with 3 flow mini batches per each reconstruction step)on a single-node on ImageNet-1K 256×256, use the  config
-[`configs/imagenet.yaml`](configs/imagenet.yaml).
-
-
-| | |
+| Added file | Purpose |
 |:--|:--|
-| **Architecture** | Base encoder (130.6M params) + Base decoder (86.2M params) |
-| **Total params** | 217.6M (all trainable) |
-| **Hardware** | 1 node × 8 NVIDIA H200 (140 GB each) |
-| **Effective batch size** | 1024 (64 per GPU × 2 gradient accumulation steps) |
-| **Precision** | BF16 mixed precision |
-| **Optimizer** | Muon |
-| **Training speed** | ~26 min/epoch |
+| `models/split.py` | `UNITEEncoder` / `UNITEDecoder`: standalone TX and RX modules, built from UNITE's own code, and checkpoint splitting |
+| `export_split.py` | Splits a UNITE training checkpoint into `encoder.pt` (~132M params) and `decoder.pt` (~87M params) |
+| `tx.py` | Transmitter: images → latents → TCP, payload file, or raw IQ samples |
+| `rx.py` | Receiver: TCP, payload file, or raw IQ samples → latents → images |
+| `utils/latent_link.py` | Latent serialization (fp16/fp32/IQ), complex baseband mapping, TCP framing |
 
+- **No change to training.** The model is trained exactly as in the original UNITE and split afterwards.
+- **Identical results.** Chaining the encoder and decoder reproduces UNITE's `reconstruct_batch` bit-exactly.
+- **Each side is independent.** The receiver needs neither the encoder weights nor LPIPS, and the transmitter doesn't need the decoder.
 
-<br/>
+## Usage
 
-UNITE has an advesarial nature due to joint optimization of reconstruction and denoising losses. See paper Sec. 3.3 for more details. The training curves should be similar to the following graph: 
-
-![](./assets/training_dynamics.png)
-<br/>
-
-
-FID and Inception Score (IS) are computed with adaptive CFG scale search — starting from the current best scale, neighboring scales are evaluated and the best is kept. All evaluations use the EMA model.
-
-
-
-![](./assets/fid_curve.png)
-
-
-
-<a name="PretrainedCheckpoints"></a>
-## Pretrained Checkpoints
-
-| Model | Encoder | Decoder | Total Params | Epochs | FID-50K | Checkpoint |
-|:------|:-------:|:-------:|:------------:|:------:|:--:|:----------:|
-| United-B | Base | Base | 217.6M | 240 | 2.12 | [Download Link](https://www.dropbox.com/scl/fi/6vbzwqiu9rqnmwm4cj5my/UNITE-B.pt?rlkey=yrqoyiw1zymqe6pn8rf0ss1d6&st=xt8hmz46&dl=0) |
-| United-L | Large | Base | 589.0M | 120 | 1.73 | [Download Link](https://www.dropbox.com/scl/fi/mvqbhq3oubog4gtswnthw/UNITE-L.pt?rlkey=ekn3m0b5wb26512dc901rj9w7&st=x91h020h&dl=0) |
-
-Checkpoint includes model weights (encoder + decoder), EMA state, optimizer state, and scheduler state for seamless resumption. Both models were trained with 14 flow iterations per single reconstruction step, so `flow_steps_per_recon = 14`
-
-
-<a name="Evaluation"></a>
-## Evaluation
-
-We will share the inference evaluation for generation and reconstruction FID and IS soon. Till then enjoy the following results from XL model.
-
-![](./assets/generation_visualization.png)
-<br/>
-
-<a name="SplitDeployment"></a>
-## Split Deployment (TX/RX)
-
-Training is unchanged. After training, the checkpoint can be split into a standalone encoder (transmitter) and decoder (receiver) that run on different machines and exchange only the latent `z` (256 tokens × 32 dims per 256×256 image).
+Train UNITE as described in the [original repository](https://github.com/ShivamDuggal4/UNITE-tokenization-generation), then:
 
 ```bash
-# Split a checkpoint (EMA weights by default) -> exported/encoder.pt (~132M), exported/decoder.pt (~87M)
+# 1. Split a checkpoint (EMA weights by default)
 python export_split.py --ckpt outputs/lets-unite/checkpoints/0400000.pt --config configs/imagenet.yaml --out-dir exported
 
-# Digital link (TCP), e.g. over Wi-Fi: start the receiver first
+# 2a. Digital link (TCP), e.g. over Wi-Fi: start the receiver first
 python rx.py --decoder exported/decoder.pt --listen 5000 --out-dir received/          # PC 2
 python tx.py --encoder exported/encoder.pt --images imgs/ --send <rx-ip>:5000          # PC 1
 
-# Analog over the air (e.g. SDR / GNU Radio): raw complex64 baseband samples
+# 2b. Payload file, for your own modem/link stack
+python tx.py --encoder exported/encoder.pt --images imgs/ --out latents.bin
+python rx.py --decoder exported/decoder.pt --in latents.bin --out-dir received/
+
+# 2c. Analog over the air (e.g. SDR / GNU Radio): raw complex64 baseband samples
 python tx.py --encoder exported/encoder.pt --images imgs/ --iq-out tx_iq               # -> tx_iq.c64 + tx_iq.json
 python rx.py --decoder exported/decoder.pt --iq-in rx_iq --out-dir received/           # rx_iq.c64 + rx_iq.json
 ```
+
+### Latent formats
+
+Each 256×256 image is represented by a latent of 256 tokens × 32 dims = 8192 values.
 
 | Format | Per image | Notes |
 |:--|:--|:--|
@@ -176,10 +54,15 @@ python rx.py --decoder exported/decoder.pt --iq-in rx_iq --out-dir received/    
 | `fp32` | 32 KiB | lossless latent |
 | `iq` | 4096 complex64 symbols | consecutive latent dims paired into I/Q, unit average power per image |
 
-For `--iq-in`, the `.c64` file must contain the received symbols already synchronized and equalized, in the same order. The `.json` side info (per-image power scale and shape) comes from the transmitter and must reach the receiver as well, for example over a separate digital link. The model was trained without channel noise, so reconstruction quality will drop as SNR decreases.
+### Notes on IQ mode
 
-<a name="Citation"></a>
-## Citation
+- `rx_iq.c64` must contain the received symbols **already synchronized and equalized**, in transmit order. Timing and frequency synchronization and channel estimation belong in your radio chain.
+- `tx_iq.json` holds side info (per-image power scale and shape). It must reach the receiver too, e.g. over a separate digital link; rename it to `rx_iq.json`.
+- The model is trained **without channel noise**, so reconstruction quality degrades as SNR decreases.
+
+## Acknowledgement
+
+All credit for the UNITE model and training code goes to the original authors:
 
 ```bibtex
 @article{duggal2026unite,

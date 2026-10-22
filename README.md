@@ -15,6 +15,7 @@ This is the code repository of the paper:
 [Training](#Training)  
 [Pretrained Checkpoints](#PretrainedCheckpoints)  
 [Evaluation](#Evaluation)  
+[Split Deployment (TX/RX)](#SplitDeployment)  
 [Citation](#Citation)  
 
 <a name="Abstract"></a>
@@ -150,6 +151,32 @@ We will share the inference evaluation for generation and reconstruction FID and
 
 ![](./assets/generation_visualization.png)
 <br/>
+
+<a name="SplitDeployment"></a>
+## Split Deployment (TX/RX)
+
+Training is unchanged. After training, the checkpoint can be split into a standalone encoder (transmitter) and decoder (receiver) that run on different machines and exchange only the latent `z` (256 tokens × 32 dims per 256×256 image).
+
+```bash
+# Split a checkpoint (EMA weights by default) -> exported/encoder.pt (~132M), exported/decoder.pt (~87M)
+python export_split.py --ckpt outputs/lets-unite/checkpoints/0400000.pt --config configs/imagenet.yaml --out-dir exported
+
+# Digital link (TCP), e.g. over Wi-Fi: start the receiver first
+python rx.py --decoder exported/decoder.pt --listen 5000 --out-dir received/          # PC 2
+python tx.py --encoder exported/encoder.pt --images imgs/ --send <rx-ip>:5000          # PC 1
+
+# Analog over the air (e.g. SDR / GNU Radio): raw complex64 baseband samples
+python tx.py --encoder exported/encoder.pt --images imgs/ --iq-out tx_iq               # -> tx_iq.c64 + tx_iq.json
+python rx.py --decoder exported/decoder.pt --iq-in rx_iq --out-dir received/           # rx_iq.c64 + rx_iq.json
+```
+
+| Format | Per image | Notes |
+|:--|:--|:--|
+| `fp16` (default) | 16 KiB | payload bytes for any digital link |
+| `fp32` | 32 KiB | lossless latent |
+| `iq` | 4096 complex64 symbols | consecutive latent dims paired into I/Q, unit average power per image |
+
+For `--iq-in`, the `.c64` file must contain the received symbols already synchronized and equalized, in the same order. The `.json` side info (per-image power scale and shape) comes from the transmitter and must reach the receiver as well, for example over a separate digital link. The model was trained without channel noise, so reconstruction quality will drop as SNR decreases.
 
 <a name="Citation"></a>
 ## Citation

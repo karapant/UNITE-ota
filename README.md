@@ -1,4 +1,6 @@
-# UNITE Split: Encoder/Decoder Deployment for Over-the-Air Latent Transmission
+# UNITE-OTA: UNITE Over the Air
+
+**Split encoder/decoder deployment of UNITE for over-the-air latent transmission.**
 
 This repository builds on **[UNITE](https://github.com/ShivamDuggal4/UNITE-tokenization-generation)** ([paper](https://arxiv.org/abs/2603.22283)) by Duggal, Bai et al. (MIT, Adobe). For model details, setup, datasets, and training, see the original repository; the model and training code here are unchanged.
 

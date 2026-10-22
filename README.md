@@ -2,7 +2,7 @@
 
 **Split encoder/decoder deployment of UNITE for over-the-air latent transmission.**
 
-This repository builds on **[UNITE](https://github.com/ShivamDuggal4/UNITE-tokenization-generation)** ([paper](https://arxiv.org/abs/2603.22283)) by Duggal, Bai et al. (MIT, Adobe). For model details, setup, datasets, and training, see the original repository; the model and training code here are unchanged.
+This repository builds on **[UNITE](https://github.com/ShivamDuggal4/UNITE-tokenization-generation)** ([paper](https://arxiv.org/abs/2603.22283)) by Duggal, Bai et al. (MIT, Adobe). For model details, setup and datasets, see the original repository; the model and training code here are unchanged.
 
 ## What this repository adds
 
@@ -20,14 +20,42 @@ A trained UNITE model is split into two standalone halves that run on **differen
 | `tx.py` | Transmitter: images → latents → TCP, payload file, or raw IQ samples |
 | `rx.py` | Receiver: TCP, payload file, or raw IQ samples → latents → images |
 | `utils/latent_link.py` | Latent serialization (fp16/fp32/IQ), complex baseband mapping, TCP framing |
+| `train_cluster.sh` | Builds the training image, prepares data/weights on a Kubernetes GPU cluster, and submits training |
+| `.env.template` | Configuration template for `train_cluster.sh` (copy to `.env`, which is gitignored) |
 
 - **No change to training.** The model is trained exactly as in the original UNITE and split afterwards.
 - **Identical results.** Chaining the encoder and decoder reproduces UNITE's `reconstruct_batch` bit-exactly.
 - **Each side is independent.** The receiver needs neither the encoder weights nor LPIPS, and the transmitter doesn't need the decoder.
 
+## Training on a Kubernetes GPU cluster
+
+Training can be run locally as described in the [original repository](https://github.com/ShivamDuggal4/UNITE-tokenization-generation), or on a Kubernetes cluster with [Kueue](https://kueue.sigs.k8s.io/) using `train_cluster.sh`. All cluster-specific settings live in `.env`:
+
+```bash
+cp .env.template .env          # fill in context, namespace, registry, GPU type, storage paths
+./train_cluster.sh             # build + push image, check/prepare data and weights, submit training
+```
+
+The steps can also be run individually:
+
+| Command | What it does |
+|:--|:--|
+| `./train_cluster.sh build [local\|remote]` | Builds the image (code, dependencies, LPIPS/VGG16 weights) with local Docker, or remotely on the cluster's BuildKit servers, and pushes it |
+| `./train_cluster.sh prepare` | Checks the cluster for ImageNet and the FID files; downloads a `SUBSET_FRACTION` of ImageNet from Hugging Face (`timm/imagenet-1k-wds`) and the FID files if missing |
+| `./train_cluster.sh train` | Submits the training job; it resumes automatically from the latest checkpoint |
+| `./train_cluster.sh status \| logs \| stop` | Shows the job state, follows the logs, or deletes the job (checkpoints are kept) |
+
+Any `.env` value can be overridden for a single run, e.g. a short run on one GPU with a custom config:
+
+```bash
+NUM_GPUS=1 TOTAL_BATCH_SIZE=32 PER_GPU_BATCH=32 CONFIG=/path/to/short.yaml EXPERIMENT_NAME=short ./train_cluster.sh train
+```
+
+Gradient accumulation is derived as `TOTAL_BATCH_SIZE / (NUM_GPUS × PER_GPU_BATCH)`. Containers run as a non-root user on a read-only root filesystem, so only `/tmp` and the mounted storage need to be writable.
+
 ## Usage
 
-Train UNITE as described in the [original repository](https://github.com/ShivamDuggal4/UNITE-tokenization-generation), then:
+After training, split the checkpoint and run the two halves:
 
 ```bash
 # 1. Split a checkpoint (EMA weights by default)

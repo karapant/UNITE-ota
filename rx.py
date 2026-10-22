@@ -17,7 +17,7 @@ import numpy as np
 import torch
 from torchvision.utils import save_image
 
-from models.split import UNITEDecoder, load_split
+from models.split import UNITEDecoder, Profiler, default_device, load_split, peak_rss_mb
 from utils.latent_link import unpack, recv_msg, from_iq
 
 
@@ -46,10 +46,13 @@ def main():
     src.add_argument("--iq-in", type=str, help="Prefix of received .c64 samples + .json side info.")
     parser.add_argument("--out-dir", type=str, default="received")
     parser.add_argument("--batch-size", type=int, default=16, help="Decode batch size for --iq-in.")
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--device", type=str, default=default_device(), help="cuda, mps or cpu (default: best available)")
     args = parser.parse_args()
 
-    decoder = load_split(args.decoder, UNITEDecoder, args.device)
+    prof = Profiler("rx", args.device)
+    with prof.time("load"):
+        decoder = load_split(args.decoder, UNITEDecoder, args.device)
+    prof.info["peak_rss_after_load_mb"] = round(peak_rss_mb(), 1)
     os.makedirs(args.out_dir, exist_ok=True)
 
     if args.iq_in:
@@ -58,20 +61,33 @@ def main():
         n_sym = side["num_tokens"] * side["dim"] // 2
         symbols = np.fromfile(f"{args.iq_in}.c64", dtype="<c8").reshape(-1, n_sym)
         scales = np.asarray(side["scales"], dtype=np.float32)
-        latents = (from_iq(symbols[i:i + args.batch_size], scales[i:i + args.batch_size],
-                           side["num_tokens"], side["dim"])
-                   for i in range(0, len(symbols), args.batch_size))
+
+        def latents():
+            for i in range(0, len(symbols), args.batch_size):
+                with prof.time("deserialize", len(symbols[i:i + args.batch_size])):
+                    z = from_iq(symbols[i:i + args.batch_size], scales[i:i + args.batch_size],
+                                side["num_tokens"], side["dim"])
+                yield z
     else:
         source = iter_socket(args.listen) if args.listen else iter_payload_file(args.in_file)
-        latents = (unpack(data)[0] for data in source)
+
+        def latents():
+            for data in source:
+                with prof.time("deserialize") as run:
+                    z = unpack(data)[0]
+                    run.items = z.shape[0]
+                yield z
 
     count = 0
-    for z in latents:
-        imgs = decoder(z.to(args.device))
+    for z in latents():
+        with prof.time("decode", z.shape[0]):
+            imgs = decoder(z.to(args.device))
         for img in imgs:
             save_image(img, os.path.join(args.out_dir, f"{count:06d}.png"))
             count += 1
         print(f"[RX] Decoded {imgs.shape[0]} images (total {count})")
+
+    prof.report(decoder, images=count)
 
 
 if __name__ == "__main__":

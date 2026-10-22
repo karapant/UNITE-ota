@@ -20,6 +20,9 @@ A trained UNITE model is split into two standalone halves that run on **differen
 | `tx.py` | Transmitter: images → latents → TCP, payload file, or raw IQ samples |
 | `rx.py` | Receiver: TCP, payload file, or raw IQ samples → latents → images |
 | `utils/latent_link.py` | Latent serialization (fp16/fp32/IQ), complex baseband mapping, TCP framing |
+| `test_ota.sh` | End-to-end test: fetches a checkpoint and validation images, splits, runs TX → RX locally, reports PSNR and profiling |
+| `channel_experiments.py`, `utils/channel.py` | Monte Carlo evaluation over statistical wireless channels (fading, Doppler, noise, CSI error) |
+| `configs/channels.yaml` | Channel scenarios (stationary, rural, dense urban, highly mobile, ...) |
 | `train_cluster.sh` | Builds the training image, prepares data/weights on a Kubernetes GPU cluster, and submits training |
 | `.env.template` | Configuration template for `train_cluster.sh` (copy to `.env`, which is gitignored) |
 
@@ -109,6 +112,28 @@ Each 256×256 image is represented by a latent of 256 tokens × 32 dims = 8192 v
 - `rx_iq.c64` must contain the received symbols **already synchronized and equalized**, in transmit order. Timing and frequency synchronization and channel estimation belong in your radio chain.
 - `tx_iq.json` holds side info (per-image power scale and shape). It must reach the receiver too, e.g. over a separate digital link; rename it to `rx_iq.json`.
 - The model is trained **without channel noise**, so reconstruction quality degrades as SNR decreases.
+
+## End-to-end test
+
+`test_ota.sh` runs the whole pipeline on one machine and only does the steps that are missing:
+
+```bash
+./test_ota.sh
+```
+
+1. Lists the models on the cluster (via `.env`) and on this machine, and asks which one to use and how many test images.
+2. Downloads the checkpoint (resumable, checksum-verified) and N validation images, one per class.
+3. Splits the checkpoint with `export_split.py`.
+4. Runs `rx.py` and `tx.py` over TCP on localhost, then reports PSNR per image, a side-by-side `comparison.png`, and profiling: model load time, encode/decode time per image, payload size, memory.
+5. Optionally runs the wireless channel scenarios in `configs/channels.yaml` and writes `ota_test/channel/report.md`.
+
+Everything is written to `ota_test/` (gitignored). Without `.env`, `kubectl`, or a cluster connection, it uses local checkpoints (`ota_test/checkpoints/*.pt`, `*.pt` in the repo root, or already split models in `ota_test/exported/`) and the images cached by the last run. Optional overrides: `PYTHON`, `EXPORT_CONFIG`, `FORCE_SPLIT=1`, `TXRX_BATCH`.
+
+The channel experiments can also be run directly:
+
+```bash
+python channel_experiments.py --exported ota_test/exported/<model> --images ota_test/images --draws 100
+```
 
 ## Acknowledgement
 

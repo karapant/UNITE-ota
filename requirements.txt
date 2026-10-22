@@ -12,3 +12,5 @@ torchvision
 lpips
 pyyaml
 clean-fid
+matplotlib
+tqdm

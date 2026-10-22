@@ -21,7 +21,7 @@ import torch
 from PIL import Image
 from torchvision import transforms
 
-from models.split import UNITEEncoder, load_split
+from models.split import UNITEEncoder, Profiler, default_device, load_split, peak_rss_mb
 from utils.crop import CenterCropTransform
 from utils.latent_link import pack, send_msg, to_iq
 
@@ -45,12 +45,15 @@ def main():
     out.add_argument("--send", type=str, help="host:port of the receiver (TCP).")
     out.add_argument("--out", type=str, help="Write all payloads to this file.")
     out.add_argument("--iq-out", type=str, help="Prefix for raw complex64 samples (.c64) + side info (.json).")
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--device", type=str, default=default_device(), help="cuda, mps or cpu (default: best available)")
     parser.add_argument("--seed", type=int, default=0, help="Seed for the encoder's input noise.")
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
-    encoder = load_split(args.encoder, UNITEEncoder, args.device)
+    prof = Profiler("tx", args.device)
+    with prof.time("load"):
+        encoder = load_split(args.encoder, UNITEEncoder, args.device)
+    prof.info["peak_rss_after_load_mb"] = round(peak_rss_mb(), 1)
     transform = transforms.Compose([CenterCropTransform(256), transforms.ToTensor()])
     files = list_images(args.images)
 
@@ -61,20 +64,26 @@ def main():
     out_file = open(args.out, "wb") if args.out else None
     iq_file = open(f"{args.iq_out}.c64", "wb") if args.iq_out else None
     iq_scales = []
+    payload_bytes = 0
 
     for i in range(0, len(files), args.batch_size):
         batch = files[i:i + args.batch_size]
         imgs = torch.stack([transform(Image.open(f).convert("RGB")) for f in batch]).to(args.device)
-        z = encoder(imgs)
+        with prof.time("encode", len(batch)):
+            z = encoder(imgs)
 
         if iq_file:
-            symbols, scale = to_iq(z)
+            with prof.time("serialize", len(batch)):
+                symbols, scale = to_iq(z)
+            payload_bytes += symbols.astype("<c8").nbytes
             iq_file.write(symbols.astype("<c8").tobytes())
             iq_scales += scale.tolist()
             print(f"[TX] {len(batch)} images -> {symbols.size} IQ symbols")
             continue
 
-        payload = pack(z, args.format)
+        with prof.time("serialize", len(batch)):
+            payload = pack(z, args.format)
+        payload_bytes += len(payload)
         if sock:
             send_msg(sock, payload)
         else:
@@ -90,6 +99,8 @@ def main():
         with open(f"{args.iq_out}.json", "w") as f:
             json.dump({"num_tokens": z.shape[1], "dim": z.shape[2], "scales": iq_scales,
                        "files": [f.name for f in files]}, f, indent=1)
+
+    prof.report(encoder, images=len(files), payload_bytes_per_image=round(payload_bytes / max(len(files), 1)))
 
 
 if __name__ == "__main__":

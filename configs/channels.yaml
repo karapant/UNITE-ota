@@ -1,0 +1,52 @@
+# Wireless channel scenarios for channel_experiments.py.
+# Values are starting points to calibrate against 3GPP TR 38.901 (UMi/UMa/RMa shadowing and
+# K-factors) and your own link budget - they are not taken from a measurement campaign.
+#
+# One draw = one transmission of one image (4096 complex symbols, unit average power):
+#   SNR_dB ~ Normal(snr_mean_db, shadowing_std_db)              large scale: path loss + shadowing
+#   h[n]   = sqrt(K/(K+1)) e^{j phi} + sqrt(1/(K+1)) g[n]        Rician; Rayleigh if k_factor_db is null
+#   g[n]   = sum-of-sinusoids Rayleigh process, max Doppler f_d = v * f_c / c   (Clarke/Jakes)
+#   y[n]   = h[n] x[n] + w[n],   w ~ CN(0, 10^(-SNR_dB/10)),    E|x|^2 = E|h|^2 = 1
+#   the receiver equalizes with h_hat = h + e,  e ~ CN(0, 10^(csi_nmse_db/10))
+link:
+  carrier_ghz: 3.5
+  symbol_rate_msps: 1.0     # 4096 symbols per image -> 4.1 ms per image at 1 Msym/s
+  equalizer: mmse           # mmse | zf
+  sinusoids: 32             # paths in the sum-of-sinusoids fading generator
+
+scenarios:
+  stationary:
+    description: Fixed terminal with line of sight (indoor, fixed wireless access)
+    snr_mean_db: 25
+    shadowing_std_db: 3
+    k_factor_db: 10
+    speed_kmh: 0
+    csi_nmse_db: -25
+  rural:
+    description: Rural macro (RMa), mostly line of sight, moderate speed
+    snr_mean_db: 15
+    shadowing_std_db: 5
+    k_factor_db: 7
+    speed_kmh: 30
+    csi_nmse_db: -20
+  urban_dense:
+    description: Dense urban micro (UMi), no line of sight, pedestrian
+    snr_mean_db: 10
+    shadowing_std_db: 8
+    k_factor_db: null
+    speed_kmh: 3
+    csi_nmse_db: -20
+  highly_mobile:
+    description: Vehicular / high speed, fading changes within one image
+    snr_mean_db: 12
+    shadowing_std_db: 6
+    k_factor_db: 3
+    speed_kmh: 250
+    csi_nmse_db: -12
+  cell_edge:
+    description: Cell edge, no line of sight, low SNR
+    snr_mean_db: 0
+    shadowing_std_db: 6
+    k_factor_db: null
+    speed_kmh: 3
+    csi_nmse_db: -15

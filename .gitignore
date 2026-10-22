@@ -9,3 +9,4 @@ datasets
 *.caches*
 *.lock
 .env
+ota_test/

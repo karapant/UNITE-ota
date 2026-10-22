@@ -53,6 +53,26 @@ NUM_GPUS=1 TOTAL_BATCH_SIZE=32 PER_GPU_BATCH=32 CONFIG=/path/to/short.yaml EXPER
 
 Gradient accumulation is derived as `TOTAL_BATCH_SIZE / (NUM_GPUS × PER_GPU_BATCH)`. Containers run as a non-root user on a read-only root filesystem, so only `/tmp` and the mounted storage need to be writable.
 
+### Choosing GPUs
+
+`GPU_PRODUCT` must match the `nvidia.com/gpu.product` node label exactly; list the values on your cluster with `kubectl get nodes -L nvidia.com/gpu.product`. Two examples:
+
+```bash
+# One H200 MIG slice (3g.71gb): short/debug runs. Tested: ~0.62 s/step at batch 32.
+NUM_GPUS=1 GPU_PRODUCT=NVIDIA-H200-MIG-3g.71gb \
+TOTAL_BATCH_SIZE=32 PER_GPU_BATCH=32 EXPERIMENT_NAME=h200-mig ./train_cluster.sh train
+
+# Four full B300 GPUs (270 GB each): batch 1024 = 4 GPUs x 128 x 2 accumulation steps.
+# Add any extra taint your cluster puts on B300 nodes to TOLERATIONS.
+NUM_GPUS=4 GPU_PRODUCT=NVIDIA-B300-SXM6-AC TOLERATIONS=nvidia.com/gpu,<b300-taint-key> \
+TOTAL_BATCH_SIZE=1024 PER_GPU_BATCH=128 EXPERIMENT_NAME=b300 ./train_cluster.sh train
+```
+
+Notes:
+- **MIG slices:** use one slice per job. Data-parallel training across several MIG slices is poorly supported by NCCL.
+- **B300:** if PyTorch reports that the GPU architecture is unsupported, switch `BASE_IMAGE` to a CUDA 13 build (e.g. `pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime`) and rebuild.
+- **Short runs:** the default config's LR schedule is defined in epochs for the full 600-epoch run. For a run of a few epochs, pass a config whose `scheduler` uses `*_steps` keys (`warmup_steps`, `warmup_1_steps`, `decay_end_1_steps`, `warmup_2_steps`, `decay_end_2_steps`) via `CONFIG=`, otherwise the run ends while the LR is still in warmup.
+
 ## Usage
 
 After training, split the checkpoint and run the two halves:
